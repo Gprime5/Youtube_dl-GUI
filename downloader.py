@@ -1,10 +1,13 @@
-from threading import Thread
 from queue import Queue
-from youtube_dl import YoutubeDL, utils
+from threading import Thread
+import time
+import json
 import logging
 
-import json
-from time import sleep
+import requests
+from youtube_dl import YoutubeDL, utils
+
+session = requests.Session()
 
 logging.basicConfig(
     style="{",
@@ -74,11 +77,12 @@ class Preview(Thread):
                 self.callback({
                     "status": "Ok",
                     "url": url,
+                    "id": result["id"],
                     "title": result["title"],
                     "uploader": result["uploader"],
                     "thumbnail": result["thumbnail"],
                     "best_video": max_video["url"],
-                    "best_audio": max_audio["url"]
+                    "best_audio": max_audio.get("url", max_video["url"])
                 })
 
 class Downloader(Thread):
@@ -87,7 +91,6 @@ class Downloader(Thread):
 
         self.queue = Queue()
         self.callback = callback
-        self.current_downloads = {}
 
         self.start()
 
@@ -99,4 +102,44 @@ class Downloader(Thread):
             self.download(self.queue.get())
 
     def download(self, info):
-        print(info)
+        filetype = f"best_{info['filetype'].lower()}"
+
+        info["status"] = "Downloading"
+
+        data = bytearray()
+        previous_time = time.time()
+        start, end = 0, 1024 * 1024 - 1
+        
+        while True:
+            session.headers["range"] = f"bytes={start}-{end}"
+
+            response = session.get(info[filetype])
+
+            if response.ok:
+                data += response.content
+            else:
+                break
+
+            content_range = response.headers["Content-Range"].split("/")
+
+            info["speed"] = len(response.content) / (time.time() - previous_time)
+            info["progress"] = len(data)
+            info["length"] = int(content_range[1])
+
+            if int(content_range[0].split("-")[1]) + 1 == info["length"]:
+                break
+
+            self.callback(info)
+
+            previous_time = time.time()
+            start += 1024 * 1024
+            end += 1024 * 1024
+
+        info["status"] = "Saving"
+        self.callback(info)
+
+        with open(f"{info['title']}.mp4", "wb") as fp:
+            fp.write(data)
+
+        info["status"] = "Finished"
+        self.callback(info)
