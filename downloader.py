@@ -8,14 +8,12 @@ import requests
 from youtube_dl import YoutubeDL, utils
 
 session = requests.Session()
-
 logging.basicConfig(
     style="{",
     level=logging.INFO,
     format="[{levelname}] {asctime} {module} {message}",
     datefmt='%H:%M:%S'
 )
-logger = logging.getLogger()
 
 class Preview(Thread):
     def __init__(self, callback):
@@ -24,7 +22,7 @@ class Preview(Thread):
         self.queue = Queue()
         self.callback = callback
         self.ytd = YoutubeDL({
-            "logger": logger,
+            "logger": logging,
             "progress_hooks": [self.callback],
             "format": "mp4"
         })
@@ -39,6 +37,12 @@ class Preview(Thread):
             self.check(self.queue.get())
 
     def check(self, url):
+        if "youtube" in url:
+            url = url.split("&")[0]
+        elif "youtu.be" in url:
+            yt_id = url.split("?")[0].split("/")[-1]
+            url = f"https://www.youtube.com/watch?v={yt_id}"
+
         try:
             self.callback({
                 "status": "Extracting",
@@ -58,32 +62,33 @@ class Preview(Thread):
                     "uploader": "Invalid url"
                 })
         else:
-            if result.get("_type") == "playlist":
-                base = "https://www.youtube.com/watch?v="
-                self.check(base + result.get("webpage_url_basename"))
-            else:
-                max_video = {"filesize": 0}
-                max_audio = {"filesize": 0}
+            # if result.get("_type") == "playlist":
+            #     base = "https://www.youtube.com/watch?v="
+            #     self.check(base + next(result["entries"])["id"])
+            # else:
+            # TODO: Add playlist functionality
 
-                for _format in result["formats"]:
-                    if _format["acodec"] != "none":
-                        if _format["vcodec"] != "none":
-                            if (_format["filesize"] or 0) > max_video["filesize"]:
-                                max_video = _format
-                        else:
-                            if (_format["filesize"] or 0) > max_audio["filesize"]:
-                                max_audio = _format
+            max_video = max_audio = {}
 
-                self.callback({
-                    "status": "Ok",
-                    "url": url,
-                    "id": result["id"],
-                    "title": result["title"],
-                    "uploader": result["uploader"],
-                    "thumbnail": result["thumbnail"],
-                    "best_video": max_video["url"],
-                    "best_audio": max_audio.get("url", max_video["url"])
-                })
+            for _format in result["formats"]:
+                if _format["acodec"] != "none":
+                    if _format["vcodec"] != "none":
+                        if (_format["filesize"] or 0) > max_video.get("filesize", 0):
+                            max_video = _format
+                    else:
+                        if (_format["filesize"] or 0) > max_audio.get("filesize", 0):
+                            max_audio = _format
+
+            self.callback({
+                "status": "Ok",
+                "url": url,
+                "id": result["id"],
+                "title": result["title"],
+                "uploader": result["uploader"],
+                "thumbnail": result["thumbnail"],
+                "best_video": max_video,
+                "best_audio": max_audio or max_video
+            })
 
 class Downloader(Thread):
     def __init__(self, callback):
@@ -91,6 +96,7 @@ class Downloader(Thread):
 
         self.queue = Queue()
         self.callback = callback
+        self.pending_removal = set()
 
         self.start()
 
@@ -100,6 +106,9 @@ class Downloader(Thread):
     def run(self):
         while True:
             self.download(self.queue.get())
+
+    def remove(self, tv_id):
+        self.pending_removal.add(tv_id)
 
     def download(self, info):
         filetype = f"best_{info['filetype'].lower()}"
@@ -113,7 +122,7 @@ class Downloader(Thread):
         while True:
             session.headers["range"] = f"bytes={start}-{end}"
 
-            response = session.get(info[filetype])
+            response = session.get(info[filetype]["url"])
 
             if response.ok:
                 data += response.content
@@ -129,16 +138,17 @@ class Downloader(Thread):
             if int(content_range[0].split("-")[1]) + 1 == info["length"]:
                 break
 
+            if info["id"] in self.pending_removal:
+                self.pending_removal.remove(info["id"])
+                return
+
             self.callback(info)
 
             previous_time = time.time()
             start += 1024 * 1024
             end += 1024 * 1024
 
-        info["status"] = "Saving"
-        self.callback(info)
-
-        with open(f"{info['title']}.mp4", "wb") as fp:
+        with open(f"{info['title']}.{info[filetype]['ext']}", "wb") as fp:
             fp.write(data)
 
         info["status"] = "Finished"
