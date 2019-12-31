@@ -165,7 +165,7 @@ class Main(Tk):
                 ["Uploader", 100],
                 ["Title", 190],
                 ["Progress", 70],
-                ["ETA", 50],
+                ["ETA (s)", 50],
                 ["Speed", 70]
             ]
         }
@@ -221,7 +221,7 @@ class Main(Tk):
 
             values = info["title"], "Queued", "-", "-"
             self.tv.insert("", "end", info["id"], text=info["uploader"], values=values)
-            self.dl_thread.add(info)
+            self.dl_thread.add(info.copy())
 
     def callback(self, info):
         if info["status"] == "Downloading":
@@ -266,9 +266,25 @@ class Main(Tk):
 
     def popup(self, args):
         if args.widget == self.tv:
-            self.tv_menu.post(args.widget, args.x_root, args.y_root)
+            tv_id = self.tv.identify_row(args.y)
+            if tv_id:
+                self.tv.selection_set(tv_id)
+                self.tv_menu.post(self, args.x_root, args.y_root)
+            else:
+                self.tv.selection_set()
         elif args.widget in (self.preview_frame.title_entry, self.preview_frame.uploader_entry):
             self.menu.post(args.widget, args.x_root, args.y_root)
+
+    def cancel(self):
+        tv_id = self.tv.selection()[0]
+        self.dl_thread.remove(tv_id)
+        self.tv.delete(tv_id)
+
+    def pause(self):
+        print("main pause")
+
+    def download_speed(self):
+        print("main download_speed")
 
     def end(self):
         self.settings["geometry"] = self.geometry()
