@@ -111,6 +111,10 @@ class Downloader(Thread):
         self.pending_removal.add(tv_id)
 
     def download(self, info):
+        if info["id"] in self.pending_removal:
+            self.pending_removal.remove(info["id"])
+            return
+                
         filetype = f"best_{info['filetype'].lower()}"
 
         info["status"] = "Downloading"
