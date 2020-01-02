@@ -3,6 +3,7 @@ from tkinter import Tk, ttk, Menu, StringVar, Entry
 import json
 
 from PIL import Image, ImageTk
+import mutagen
 import requests
 
 import downloader
@@ -198,6 +199,7 @@ class Main(Tk):
 
         self.pv_thread = downloader.Preview(self.callback)
         self.dl_thread = downloader.Downloader(self.callback)
+        self.cv_thread = downloader.Converter(self.callback)
 
         try:
             self.pv_thread.add(self.clipboard_get())
@@ -224,7 +226,9 @@ class Main(Tk):
             self.dl_thread.add(info.copy())
 
     def callback(self, info):
-        if info["status"] == "Downloading":
+        # Downloading, Finished, Converting, Converted
+
+        if info["status"] in ("Downloading", "Finished", "Converting"):
             remaining = info["length"] - info["progress"]
             eta = f"{remaining / info['speed']:.2f}"
 
@@ -237,13 +241,25 @@ class Main(Tk):
             elif info["speed"] < 2e12:
                 speed = f"{info['speed']/1e9:.0f}Gbps"
 
-            values = info["title"], f"{info['progress']*100/info['length']:.2f}%", eta, speed
+            if info["status"] == "Converting":
+                values = info["title"], "Converting", eta, speed
+            else:
+                values = info["title"], f"{info['progress']*100/info['length']:.2f}%", eta, speed
+
+            if info["status"] == "Finished":
+                ext = info[f"best_{info['filetype'].lower()}"]['ext']
+                muta = mutagen.File(f"Downloads/{info['title']}.{ext}")
+                muta["©ART"] = info["uploader"]
+                muta.save()
+
+                if info["filetype"] == "Audio":
+                    values = info["title"], "Converting", eta, speed
+                    self.cv_thread.add(info)
 
             self.tv.item(info["id"], values=values)
-        elif info["status"] == "Finished":
+        elif info["status"] == "Converted":
             self.tv.delete(info["id"])
         else:
-            self.preview_frame.url = info["url"]
             self.preview_frame.thumbnail = info["thumbnail"]
             self.preview_frame.title = info["title"]
             self.preview_frame.uploader = info["uploader"]
@@ -258,6 +274,7 @@ class Main(Tk):
         else:
             if self.state["current_url"] != url:
                 self.state["current_url"] = url
+                self.preview_frame.url = url
 
                 if self.focus_get() is None:
                     self.pv_thread.add(self.state["current_url"])
