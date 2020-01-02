@@ -1,11 +1,13 @@
 from queue import Queue
 from threading import Thread
-import time
 import json
 import logging
+import os
+import subprocess
+import time
 
-import requests
 from youtube_dl import YoutubeDL, utils
+import requests
 
 session = requests.Session()
 logging.basicConfig(
@@ -14,6 +16,8 @@ logging.basicConfig(
     format="[{levelname}] {asctime} {module} {message}",
     datefmt='%H:%M:%S'
 )
+
+os.makedirs("Downloads", exist_ok=True)
 
 class Preview(Thread):
     def __init__(self, callback):
@@ -114,15 +118,16 @@ class Downloader(Thread):
         if info["id"] in self.pending_removal:
             self.pending_removal.remove(info["id"])
             return
-                
-        filetype = f"best_{info['filetype'].lower()}"
 
         info["status"] = "Downloading"
+
+        # Maybe just use youtube_dl's downloader
 
         data = bytearray()
         previous_time = time.time()
         start, end = 0, 1024 * 1024 - 1
-        
+        filetype = f"best_{info['filetype'].lower()}"
+
         while True:
             session.headers["range"] = f"bytes={start}-{end}"
 
@@ -152,8 +157,38 @@ class Downloader(Thread):
             start += 1024 * 1024
             end += 1024 * 1024
 
-        with open(f"{info['title']}.{info[filetype]['ext']}", "wb") as fp:
+        with open(f"Downloads/{info['title']}.{info[filetype]['ext']}", "wb") as fp:
             fp.write(data)
 
         info["status"] = "Finished"
+        self.callback(info)
+
+class Converter(Thread):
+    def __init__(self, callback):
+        super().__init__(daemon=True)
+
+        self.queue = Queue()
+        self.callback = callback
+
+        self.start()
+
+    def add(self, info):
+        self.queue.put(info)
+
+    def run(self):
+        while True:
+            self.convert(self.queue.get())
+
+    def convert(self, info):
+        info["status"] = "Converting"
+        self.callback(info)
+        ext = info[f"best_{info['filetype'].lower()}"]['ext']
+        subprocess.run([
+            "ffmpeg.exe",
+            "-i", f"Downloads/{info['title']}.{ext}",
+            f"Downloads/{info['title']}.mp3",
+            "-y"
+        ])
+        info["status"] = "Converted"
+        os.remove(f"Downloads/{info['title']}.{ext}")
         self.callback(info)
