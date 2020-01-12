@@ -1,10 +1,7 @@
-from io import BytesIO
-from tkinter import Tk, ttk, Menu, StringVar, Entry
+from tkinter import Tk, ttk, Menu, StringVar, Entry, TclError
 import json
 
 from PIL import Image, ImageTk
-import mutagen
-import requests
 
 import downloader
 
@@ -82,8 +79,7 @@ class PreviewFrame(ttk.Frame):
             if value is None:
                 self.image = self._blank_image
             else:
-                data = BytesIO(requests.get(value).content)
-                img = Image.open(data).resize((128, 72), Image.ANTIALIAS)
+                img = Image.open(value).resize((128, 72), Image.ANTIALIAS)
                 self.image = ImageTk.PhotoImage(img)
             self.thumbnail_frame["image"] = self.image
         elif key in ("url", "title", "uploader"):
@@ -130,15 +126,6 @@ class Tree(ttk.Treeview):
             sbar.grid()
         sbar.set(first, last)
 
-    def cancel(self):
-        print("tv cancel")
-
-    def pause(self):
-        print("tv pause")
-
-    def download_speed(self):
-        print("tv download_speed")
-
 class BottomFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
@@ -157,9 +144,9 @@ class Main(Tk):
     def __init__(self):
         super().__init__()
 
-        self.state = {
-            "current_url": None
-        }
+        self.current_url = None
+        self.current_info = None
+
         self.settings = {
             "geometry": "600x250+400+300",
             "treeview": [
@@ -197,12 +184,12 @@ class Main(Tk):
         self.menu = PopupMenu(self, "cut", "copy", "paste")
         self.tv_menu = PopupMenu(self, "cancel", "pause", "download_speed")
 
-        self.pv_thread = downloader.Preview(self.callback)
+        self.pv_thread = downloader.Preview(self.preview_callback)
         self.dl_thread = downloader.Downloader(self.callback)
         self.cv_thread = downloader.Converter(self.callback)
 
         try:
-            self.pv_thread.add(self.clipboard_get())
+            self.pv_thread.put(self.clipboard_get())
         except TclError:
             pass
 
@@ -214,57 +201,56 @@ class Main(Tk):
         self.mainloop()
 
     def download(self, filetype):
-        info = self.state["current_info"]
+        info = self.current_info
 
-        if info["status"] == "Ok" and not self.tv.exists(info["id"]):
+        if info["status"] not in ("Extracting", "Error") and not self.tv.exists(info["id"]):
             info["filetype"] = filetype
             info["title"] = self.preview_frame.title_entry.get()
             info["uploader"] = self.preview_frame.uploader_entry.get()
 
             values = info["title"], "Queued", "-", "-"
             self.tv.insert("", "end", info["id"], text=info["uploader"], values=values)
-            self.dl_thread.add(info.copy())
+            self.dl_thread.put(info)
+
+    def preview_callback(self, info):
+        self.preview_frame.thumbnail = info["thumbnail"]
+        self.preview_frame.title = info["title"]
+        self.preview_frame.uploader = info["uploader"]
+
+        self.current_info = info
 
     def callback(self, info):
-        # Downloading, Finished, Converting, Converted
+        remaining = info["length"] - info["progress"]
+        eta = f"{remaining / info['speed']:.2f}"
 
-        if info["status"] in ("Downloading", "Finished", "Converting"):
-            remaining = info["length"] - info["progress"]
-            eta = f"{remaining / info['speed']:.2f}"
+        if info["speed"] < 2e3:
+            speed = f"{info['speed']:.0f}bps"
+        elif info["speed"] < 2e6:
+            speed = f"{info['speed']/1e3:.0f}Kbps"
+        elif info["speed"] < 2e9:
+            speed = f"{info['speed']/1e6:.0f}Mbps"
+        elif info["speed"] < 2e12:
+            speed = f"{info['speed']/1e9:.0f}Gbps"
 
-            if info["speed"] < 2e3:
-                speed = f"{info['speed']:.0f}bps"
-            elif info["speed"] < 2e6:
-                speed = f"{info['speed']/1e3:.0f}Kbps"
-            elif info["speed"] < 2e9:
-                speed = f"{info['speed']/1e6:.0f}Mbps"
-            elif info["speed"] < 2e12:
-                speed = f"{info['speed']/1e9:.0f}Gbps"
+        values = [info["title"], f"{info['progress']*100/info['length']:.2f}%", eta, speed]
 
-            if info["status"] == "Converting":
-                values = info["title"], "Converting", eta, speed
-            else:
-                values = info["title"], f"{info['progress']*100/info['length']:.2f}%", eta, speed
-
-            if info["status"] == "Finished":
-                ext = info[f"best_{info['filetype'].lower()}"]['ext']
-                muta = mutagen.File(f"Downloads/{info['title']}.{ext}")
-                muta["©ART"] = info["uploader"]
-                muta.save()
-
-                if info["filetype"] == "Audio":
-                    values = info["title"], "Converting", eta, speed
-                    self.cv_thread.add(info)
-
-            self.tv.item(info["id"], values=values)
+        if info["status"] == "Finished":
+            if info["filetype"] == "Video":
+                if self.tv.exists(info["id"]):
+                    self.tv.delete(info["id"])
+                return True
+            self.cv_thread.put(info)
         elif info["status"] == "Converted":
-            self.tv.delete(info["id"])
-        else:
-            self.preview_frame.thumbnail = info["thumbnail"]
-            self.preview_frame.title = info["title"]
-            self.preview_frame.uploader = info["uploader"]
+            if self.tv.exists(info["id"]):
+                self.tv.delete(info["id"])
+            return True
+        elif info["status"] == "Converting":
+            values[1] = "Converting"
 
-            self.state["current_info"] = info
+        if self.tv.exists(info["id"]):
+            self.tv.item(info["id"], values=values)
+        else:
+            return True
 
     def check_clipboard(self):
         try:
@@ -272,12 +258,12 @@ class Main(Tk):
         except TclError:
             pass
         else:
-            if self.state["current_url"] != url:
-                self.state["current_url"] = url
+            if self.current_url != url:
+                self.current_url = url
                 self.preview_frame.url = url
 
                 if self.focus_get() is None:
-                    self.pv_thread.add(self.state["current_url"])
+                    self.pv_thread.put(self.current_url)
 
             self.after(100, self.check_clipboard)
 
@@ -293,14 +279,14 @@ class Main(Tk):
             self.menu.post(args.widget, args.x_root, args.y_root)
 
     def cancel(self):
-        tv_id = self.tv.selection()[0]
-        self.dl_thread.remove(tv_id)
-        self.tv.delete(tv_id)
+        self.tv.delete(self.tv.selection()[0])
 
     def pause(self):
+        # TODO
         print("main pause")
 
     def download_speed(self):
+        # TODO
         print("main download_speed")
 
     def end(self):
