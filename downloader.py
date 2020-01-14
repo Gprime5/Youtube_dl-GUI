@@ -11,7 +11,6 @@ from youtube_dl import YoutubeDL, utils
 import mutagen
 import requests
 
-session = requests.Session()
 logging.basicConfig(
     style="{",
     level=logging.INFO,
@@ -91,7 +90,7 @@ class Preview(BaseThread):
                 "id": result["id"],
                 "title": result["title"],
                 "uploader": result["uploader"],
-                "thumbnail": BytesIO(session.get(result["thumbnail"]).content),
+                "thumbnail": BytesIO(requests.get(result["thumbnail"]).content),
                 "best_video": max_video,
                 "best_audio": max_audio or max_video
             })
@@ -109,9 +108,7 @@ class Downloader(BaseThread):
             start, end = 0, 2**20 - 1
 
             while True:
-                session.headers["range"] = f"bytes={start}-{end}"
-
-                response = session.get(info[filetype]["url"])
+                response = requests.get(info[filetype]["url"], headers={"range":f"bytes={start}-{end}"})
 
                 if response.ok:
                     data += response.content
