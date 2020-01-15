@@ -103,7 +103,7 @@ class Downloader(BaseThread):
         if not os.path.isfile(filename):
             info["status"] = "Downloading"
 
-            data = bytearray()
+            info["progress"] = 0
             previous_time = time.time()
             start, end = 0, 2**20 - 1
 
@@ -111,27 +111,24 @@ class Downloader(BaseThread):
                 response = requests.get(info[filetype]["url"], headers={"range":f"bytes={start}-{end}"})
 
                 if response.ok:
-                    data += response.content
+                    with open(filename, "ab") as fp:
+                        fp.write(response.content)
+                    info["progress"] += len(response.content)
                 else:
                     break
 
-                content_range = response.headers["Content-Range"].split("/")
+                content_end, info["length"] = map(int, response.headers["Content-Range"].split("-")[1].split("/"))
 
                 info["speed"] = len(response.content) / (time.time() - previous_time)
-                info["progress"] = len(data)
-                info["length"] = int(content_range[1])
                 if self.callback(info):
                     return
 
-                if int(content_range[0].split("-")[1]) + 1 == info["length"]:
+                if content_end + 1 == info["length"]:
                     break
 
                 previous_time = time.time()
                 start += 2**20
                 end += 2**20
-
-            with open(filename, "wb") as fp:
-                fp.write(data)
 
         info["status"] = "Finished"
         self.callback(info)
